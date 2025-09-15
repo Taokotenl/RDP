@@ -90,28 +90,20 @@ jobs:
 
       - name: Configure macOS UI Access
         run: |
-          echo "Configuring UI accessibility..."
+          echo "Configuring additional UI settings..."
           
-          # Enable remote management and screen sharing
+          # Disable sleep and screen saver for better remote access
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          sudo pmset -a disksleep 0
+          
+          # Disable screen saver
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          
+          # Ensure remote login is enabled (usually already on)
           sudo systemsetup -setremotelogin on 2>/dev/null || true
           
-          # Try to enable Screen Sharing via preferences
-          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
-          
-          # Alternative VNC setup if previous methods failed
-          if ! lsof -i :5900 >/dev/null 2>&1; then
-            echo "Setting up VNC using alternative method..."
-            
-            # Create VNC configuration
-            sudo mkdir -p /Library/Preferences/com.apple.VNCSettings.txt
-            echo "$(echo -n "$VNC_PASSWORD" | openssl dgst -md5 -binary | base64)" | sudo tee /var/db/vncserver/vncpasswd >/dev/null 2>&1 || true
-            
-            # Enable VNC via command line
-            sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off 2>/dev/null || true
-            sudo /usr/bin/killall -HUP mDNSResponder 2>/dev/null || true
-          fi
-          
-          echo "UI access configuration completed"
+          echo "UI settings configured successfully"
 
       - name: Display Connection Information
         run: |
