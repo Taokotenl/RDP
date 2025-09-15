@@ -1,0 +1,46 @@
+name: Free Cloud PC (Ubuntu + Tailscale RDP)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu-rdp-tailscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Cài desktop & xrdp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xrdp xfce4 xfce4-goodies curl
+          sudo adduser githubrdp --gecos "" --disabled-password
+          echo "githubrdp:rdp12345" | sudo chpasswd
+          sudo usermod -aG sudo githubrdp
+          echo "xfce4-session" > /home/githubrdp/.xsession
+          sudo chown githubrdp:githubrdp /home/githubrdp/.xsession
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+      - name: Cài Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ghrunner-${{ github.run_id }}
+
+      - name: Hiển thị thông tin truy cập
+        run: |
+          TS_IP=$(tailscale ip -4)
+          echo "==================================="
+          echo "Truy cập RDP qua Tailscale!"
+          echo "Tailscale IP : $TS_IP"
+          echo "Tài khoản    : githubrdp"
+          echo "Mật khẩu     : rdp12345"
+          echo "Port         : 3389"
+          echo "==================================="
+          echo "Bạn cần cài Tailscale ở máy khách, join cùng mạng, sau đó truy cập RDP qua IP trên."
+
+      - name: Giữ phiên hoạt động
+        run: |
+          while true; do
+            echo "RDP session active: $(date)"
+            sleep 300
+          done
