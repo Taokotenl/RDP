@@ -1,87 +1,30 @@
-name: Remote Access via Tailscale (X11 VNC) - Fixed
+name: macOS VNC Server
 
 on:
   workflow_dispatch:
 
 jobs:
-  remote_access:
+  macos-vnc:
     runs-on: macos-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Update Homebrew
+        run: brew update
 
-      - name: Install Tailscale
+      - name: Cài đặt TigerVNC
+        run: brew install tiger-vnc
+
+      - name: Thiết lập mật khẩu VNC
         run: |
-          brew install tailscale
-
-      - name: Start Tailscale Service and Connect
-        env:
-          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          sudo tailscaled &
-          sleep 5
-          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
-          sleep 10
-          TS_IP=$(tailscale ip -4)
-          if [[ -z "$TS_IP" ]]; then
-            echo "::error::Failed to get Tailscale IP. Exiting."
-            exit 1
-          fi
-          echo "Assigned Tailscale IP: $TS_IP"
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
-      - name: Install GUI packages (XQuartz + TigerVNC)
-        run: |
-          brew install --cask xquartz
-          brew install tiger-vnc xterm
-
-      - name: Configure & Start Virtual Desktop with VNC
-        run: |
-          # Ensure Homebrew bin in PATH
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-          # Generate 8-char VNC password
-          VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
           mkdir -p ~/.vnc
-          echo $VNC_PASSWORD > ~/.vncpass
-          /opt/homebrew/bin/vncpasswd -f < ~/.vncpass > ~/.vnc/passwd 2>/dev/null || \
-          /usr/local/bin/vncpasswd -f < ~/.vncpass > ~/.vnc/passwd
+          echo "123456" | /opt/homebrew/bin/vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
-          rm ~/.vncpass
 
-          # Start Xvfb (virtual framebuffer for GUI)
-          /opt/X11/bin/Xvfb :1 -screen 0 1280x800x24 &
-          sleep 5
-
-          # Start a lightweight window manager
-          DISPLAY=:1 /opt/X11/bin/twm &
-
-          # Start a terminal so GUI is visible immediately
-          DISPLAY=:1 xterm &
-
-          # Start TigerVNC server
-          /opt/homebrew/bin/vncserver :1 -rfbport 5900 -PasswordFile ~/.vnc/passwd || \
-          /usr/local/bin/vncserver :1 -rfbport 5900 -PasswordFile ~/.vnc/passwd
-
-          # Save password
-          echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
-
-      - name: Display Connection Details
+      - name: Start VNC server
         run: |
-          echo "========================================"
-          echo "       VNC Access via Tailscale"
-          echo "========================================"
-          echo "Connect using any VNC client:"
-          echo "Address: $TAILSCALE_IP"
-          echo "Port: 5900"
-          echo "Password: $VNC_PASSWORD"
-          echo "Username: (leave blank)"
-          echo "========================================"
-          echo "This is a virtual X11 desktop (not macOS Finder)."
-          echo "You will see twm + xterm running."
-          echo "========================================"
+          /opt/homebrew/bin/vncserver -geometry 1280x800 -localhost no
+          echo "VNC server started on port 5901"
 
-      - name: Keep Alive
-        run: sleep 21600
+      - name: Giữ kết nối
+        run: sleep 3600
