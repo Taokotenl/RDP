@@ -1,4 +1,4 @@
-name: Remote Access via Tailscale (VNC) - Fixed
+name: Remote Access via Tailscale (X11 VNC) - Fixed
 
 on:
   workflow_dispatch:
@@ -32,39 +32,47 @@ jobs:
           echo "Assigned Tailscale IP: $TS_IP"
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Enable and Secure VNC Server (Password only)
+      - name: Install GUI packages (XQuartz + TigerVNC)
         run: |
-          # Stop ARD if already running
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
-          
-          # Generate 8-char VNC password (alphanumeric only)
+          brew install --cask xquartz
+          brew install tigervnc
+
+      - name: Configure & Start Virtual Desktop with VNC
+        run: |
+          # Generate 8-char VNC password
           VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
+          echo $VNC_PASSWORD > ~/.vncpass
+          vncpasswd -f < ~/.vncpass > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+          rm ~/.vncpass
 
-          # Enable ARD with legacy VNC password auth
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
+          # Start Xvfb (virtual framebuffer for GUI)
+          /usr/X11/bin/Xvfb :1 -screen 0 1280x800x24 &
+          sleep 5
 
-          # Save password to env
+          # Start a lightweight window manager (twm from XQuartz)
+          DISPLAY=:1 /usr/X11/bin/twm &
+
+          # Start TigerVNC server
+          vncserver :1 -rfbport 5900 -PasswordFile ~/.vnc/passwd
+
+          # Save password for later
           echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
-
-          # Restart ARD service
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -activate
 
       - name: Display Connection Details
         run: |
           echo "========================================"
           echo "       VNC Access via Tailscale"
           echo "========================================"
-          echo "Connect with any VNC client:"
+          echo "Connect using any VNC client:"
           echo "Address: $TAILSCALE_IP"
           echo "Port: 5900"
+          echo "Password: $VNC_PASSWORD"
           echo "Username: (leave blank)"
-          echo "VNC Password: $VNC_PASSWORD"
           echo "========================================"
-          echo "The runner will stay active for 6 hours."
+          echo "NOTE: This is a virtual X11 desktop (not macOS Finder)."
+          echo "The runner will stay alive for 6 hours."
+          echo "========================================"
 
-      - name: Maintain Connection
-        run: |
-          echo "Keeping job alive..."
-          sleep 21600
+      - name: Keep Alive
+        run: sleep 21600
