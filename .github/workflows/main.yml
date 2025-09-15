@@ -1,0 +1,63 @@
+name: Remote Access via Ngrok (Manual Install)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_user:
+        description: 'SSH User (e.g., runner)'
+        required: true
+        default: 'runner'
+      ssh_port:
+        description: 'SSH Port'
+        required: true
+        default: '22'
+
+jobs:
+  remote_access:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install and Authenticate Ngrok
+        run: |
+          # Download the Ngrok binary for macOS
+          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-amd64.zip
+          unzip ngrok-stable-darwin-amd64.zip
+          chmod +x ngrok
+          
+          # Add the ngrok binary to a directory in PATH
+          sudo mv ngrok /usr/local/bin/
+          
+          # Authenticate with your Ngrok token
+          ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
+
+      - name: Start Ngrok Tunnel and Display URL
+        run: |
+          # Start the ngrok tunnel in the background
+          ngrok tcp ${{ github.event.inputs.ssh_port }} --log-format=json > ngrok.log &
+          
+          # Wait a few seconds for the tunnel to establish
+          sleep 5
+          
+          # Use curl and jq to get the public URL from the ngrok API
+          # The Ngrok agent API runs on http://localhost:4040
+          public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          
+          # Extract host and port
+          host=$(echo $public_url | sed 's/tcp:\/\///' | cut -d':' -f1)
+          port=$(echo $public_url | sed 's/tcp:\/\///' | cut -d':' -f2)
+          
+          echo "Connect to your runner using:"
+          echo "ssh ${{ github.event.inputs.ssh_user }}@$host -p $port"
+          echo "The runner will stay active for 6 hours unless the job is canceled."
+          
+          # This step is crucial. It prints a special command that keeps the job running.
+          # We need to export this so the next step can access it.
+          echo "::set-output name=ssh_command::ssh ${{ github.event.inputs.ssh_user }}@$host -p $port"
+
+      - name: Keep job running
+        run: |
+          echo "Keeping job alive..."
+          sleep 21600 # Wait for 6 hours (60 * 60 * 6 = 21600 seconds)
