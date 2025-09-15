@@ -1,4 +1,4 @@
-name: Remote Access via Ngrok (VNC) v3
+name: Remote Access via Tailscale (MacOS)
 
 on:
   workflow_dispatch:
@@ -11,26 +11,11 @@ on:
 jobs:
   remote_access:
     runs-on: macos-latest
+    timeout-minutes: 3600 # 6 hours
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install and Authenticate Ngrok
-        run: |
-          # Download the Ngrok binary for macOS
-          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-amd64.zip
-          unzip ngrok-stable-darwin-amd64.zip
-          chmod +x ngrok
-          
-          # Add the ngrok binary to a directory in PATH
-          sudo mv ngrok /usr/local/bin/
-          
-          # Create the ngrok config directory
-          mkdir -p ~/.config/ngrok
-          
-          # Write the auth token directly to the config file
-          echo "authtoken: ${{ secrets.NGROK_TOKEN }}" > ~/.config/ngrok/ngrok.yml
 
       - name: Enable VNC Server on macOS Runner
         run: |
@@ -41,36 +26,45 @@ jobs:
           # Set VNC password directly
           echo "${{ github.event.inputs.vnc_password }}" | sudo perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C", $; foreach (@k) { printf "%02X", $ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
 
-      - name: Start Ngrok Tunnel and Display URL
-        id: ngrok
+      - name: Install Tailscale
         run: |
-          # Start the ngrok tunnel in the background
-          ngrok tcp 5900 > ngrok.log &
-          
-          # Loop and wait for the ngrok agent to be ready
-          attempt_counter=0
-          max_attempts=15
-          public_url=""
+          # Install the Tailscale CLI on macOS
+          brew install tailscale
 
-          until [ "$public_url" != "" ]; do
-            if [ ${attempt_counter} -eq ${max_attempts} ];then
-              echo "Max attempts reached. Failed to get a public URL from ngrok."
-              echo "::error::Failed to get a public URL from ngrok. Check ngrok.log for details."
-              cat ngrok.log
-              exit 1
-            fi
-            
-            sleep 2
-            public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-            attempt_counter=$(($attempt_counter+1))
-          done
+      - name: Connect to Tailscale Network
+        env:
+          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          # Authenticate and connect to your Tailscale network
+          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
           
-          echo "Connect to your runner using your VNC client:"
-          echo "$public_url"
-          echo "The VNC password is: ${{ github.event.inputs.vnc_password }}"
-          echo "The runner will stay active for 6 hours unless the job is canceled."
+          # Wait a few seconds for Tailscale to get an IP
+          sleep 10
+          
+          # Get the assigned Tailscale IP address
+          TS_IP=$(tailscale ip -4)
+          
+          # Check if IP was assigned
+          if [[ -z "$TS_IP" ]]; then
+            echo "::error::Failed to get Tailscale IP. Exiting."
+            exit 1
+          fi
+          
+          echo "Assigned Tailscale IP: $TS_IP"
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Keep job running
+      - name: Display Connection Details
+        run: |
+          echo "========================================"
+          echo "   VNC Access Via Tailscale"
+          echo "========================================"
+          echo "Connect to your runner using a VNC client:"
+          echo "Address: $TAILSCALE_IP"
+          echo "VNC Password: ${{ github.event.inputs.vnc_password }}"
+          echo "========================================"
+          echo "The runner will stay active for 6 hours."
+
+      - name: Maintain Connection
         run: |
           echo "Keeping job alive..."
           sleep 21600 # Wait for 6 hours (60 * 60 * 6 = 21600 seconds)
