@@ -1,0 +1,63 @@
+name: Remote Access via Ngrok (VNC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      vnc_password:
+        description: 'VNC Password'
+        required: true
+        default: 'password'
+
+jobs:
+  remote_access:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install and Authenticate Ngrok
+        run: |
+          # Download the Ngrok binary for macOS
+          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-amd64.zip
+          unzip ngrok-stable-darwin-amd64.zip
+          chmod +x ngrok
+          
+          # Add the ngrok binary to a directory in PATH
+          sudo mv ngrok /usr/local/bin/
+          
+          # Create the ngrok config directory
+          mkdir -p ~/.config/ngrok
+          
+          # Write the auth token directly to the config file
+          echo "authtoken: ${{ secrets.NGROK_TOKEN }}" > ~/.config/ngrok/ngrok.yml
+
+      - name: Enable VNC Server on macOS Runner
+        run: |
+          # Enable VNC server, allow all users to access with all privileges
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
+          
+          # Set VNC password directly
+          echo "${{ github.event.inputs.vnc_password }}" | sudo perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C", $; foreach (@k) { printf "%02X", $ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
+
+      - name: Start Ngrok Tunnel and Display URL
+        run: |
+          # Start the ngrok tunnel for VNC on port 5900 in the background
+          ngrok tcp 5900 --log-format=json > ngrok.log &
+          
+          # Wait a few seconds for the tunnel to establish
+          sleep 5
+          
+          # Use curl and jq to get the public URL from the ngrok API
+          public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          
+          echo "Connect to your runner using your VNC client:"
+          echo "$public_url"
+          echo "The VNC password is: ${{ github.event.inputs.vnc_password }}"
+          echo "The runner will stay active for 6 hours unless the job is canceled."
+
+      - name: Keep job running
+        run: |
+          echo "Keeping job alive..."
+          sleep 21600 # Wait for 6 hours (60 * 60 * 6 = 21600 seconds)
