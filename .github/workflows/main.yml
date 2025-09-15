@@ -1,12 +1,12 @@
-name: Remote Access via Tailscale (VNC) - Fixed
+name: Remote Access via Tailscale (VNC) - Improved
 
 on:
   workflow_dispatch:
 
 jobs:
   remote_access:
-    runs-on: macos-12
-    timeout-minutes: 3600
+    runs-on: macos-latest
+    timeout-minutes: 360  # 6 hours
 
     steps:
       - name: Checkout repository
@@ -14,57 +14,179 @@ jobs:
 
       - name: Install Tailscale
         run: |
+          echo "Installing Tailscale..."
           brew install tailscale
+          
+      - name: Create user account for VNC
+        run: |
+          # Create a temporary user for VNC access
+          sudo dscl . -create /Users/vncuser
+          sudo dscl . -create /Users/vncuser UserShell /bin/bash
+          sudo dscl . -create /Users/vncuser RealName "VNC User"
+          sudo dscl . -create /Users/vncuser UniqueID 1001
+          sudo dscl . -create /Users/vncuser PrimaryGroupID 80
+          sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
+          sudo createhomedir -c -u vncuser
+          
+          # Set password for the user
+          echo "vncuser:$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)" | sudo chpasswd
+          
+          # Add user to admin group for full access
+          sudo dscl . -append /Groups/admin GroupMembership vncuser
 
       - name: Start Tailscale Service and Connect
         env:
           TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          sudo tailscaled &
-          sleep 5
-          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
-          sleep 10
-          TS_IP=$(tailscale ip -4)
-          if [[ -z "$TS_IP" ]]; then
-            echo "::error::Failed to get Tailscale IP. Exiting."
+          echo "Starting Tailscale daemon..."
+          sudo tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+          
+          # Wait for daemon to start
+          for i in {1..30}; do
+            if pgrep -x tailscaled > /dev/null; then
+              echo "Tailscale daemon started"
+              break
+            fi
+            echo "Waiting for Tailscale daemon... ($i/30)"
+            sleep 2
+          done
+          
+          if ! pgrep -x tailscaled > /dev/null; then
+            echo "::error::Failed to start Tailscale daemon"
             exit 1
           fi
-          echo "Assigned Tailscale IP: $TS_IP"
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
-      - name: Enable and Secure VNC Server (Password only)
-        run: |
-          # Stop ARD if already running
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
           
-          # Generate 8-char VNC password (alphanumeric only)
-          VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
+          echo "Connecting to Tailscale network..."
+          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }} --accept-dns=false
+          
+          # Wait for connection and get IP
+          for i in {1..60}; do
+            TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
+            if [[ -n "$TS_IP" && "$TS_IP" != *"100.64."* ]]; then
+              echo "Successfully connected to Tailscale"
+              echo "Assigned Tailscale IP: $TS_IP"
+              echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+              break
+            fi
+            echo "Waiting for Tailscale IP assignment... ($i/60)"
+            sleep 2
+          done
+          
+          if [[ -z "$TS_IP" ]]; then
+            echo "::error::Failed to get valid Tailscale IP after 2 minutes"
+            tailscale status
+            exit 1
+          fi
 
-          # Enable ARD with legacy VNC password auth
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
-
-          # Save password to env
+      - name: Configure VNC Server
+        run: |
+          echo "Configuring VNC server..."
+          
+          # Generate strong VNC password
+          VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-12)
           echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
+          
+          # Stop any existing ARD/VNC services
+          sudo launchctl unload /System/Library/LaunchDaemons/com.apple.RemoteDesktop.privileged_helper.plist 2>/dev/null || true
+          sudo launchctl unload /System/Library/LaunchAgents/com.apple.RemoteDesktop.agent.plist 2>/dev/null || true
+          
+          # Configure Screen Sharing (VNC)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -configure -allowAccessFor -allUsers -privs -all \
+            -configure -clientopts -setvnclegacy -vnclegacy yes \
+            -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD" \
+            -activate -restart -console
+          
+          # Enable Screen Sharing service
+          sudo launchctl load /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
+          # Wait for VNC to start
+          sleep 10
+          
+          # Verify VNC is listening
+          if lsof -i :5900 > /dev/null; then
+            echo "VNC server is running on port 5900"
+          else
+            echo "::warning::VNC server may not be running properly"
+          fi
 
-          # Restart ARD service
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -activate
+      - name: Configure macOS UI Access
+        run: |
+          # Enable accessibility features for better remote control
+          sudo sqlite3 /Library/Application\ Support/com.apple.TCC/TCC.db \
+            "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.RemoteDesktop.agent',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,1541440109);" 2>/dev/null || true
+          
+          # Prevent sleep and screen saver
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          sudo pmset -a disksleep 0
+          
+          # Disable screen saver
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          
+          echo "UI access configured"
 
-      - name: Display Connection Details
+      - name: Display Connection Information
         run: |
           echo "========================================"
-          echo "       VNC Access via Tailscale"
+          echo "    🖥️  VNC Remote Access Ready"
           echo "========================================"
-          echo "Connect with any VNC client:"
-          echo "Address: $TAILSCALE_IP"
-          echo "Port: 5900"
-          echo "Username: (leave blank)"
-          echo "VNC Password: $VNC_PASSWORD"
+          echo ""
+          echo "Connection Details:"
+          echo "• Tailscale IP: $TAILSCALE_IP"
+          echo "• VNC Port: 5900"
+          echo "• VNC Password: $VNC_PASSWORD"
+          echo ""
+          echo "How to Connect:"
+          echo "1. Make sure you're connected to the same Tailscale network"
+          echo "2. Use any VNC client (e.g., RealVNC, TightVNC, built-in Screen Sharing)"
+          echo "3. Connect to: vnc://$TAILSCALE_IP:5900"
+          echo "4. Enter the password when prompted: $VNC_PASSWORD"
+          echo ""
+          echo "Tailscale Network Status:"
+          tailscale status | head -10
+          echo ""
+          echo "🕒 Session will remain active for 6 hours"
           echo "========================================"
-          echo "The runner will stay active for 6 hours."
 
-      - name: Maintain Connection
+      - name: Keep Session Active
         run: |
-          echo "Keeping job alive..."
-          sleep 21600
+          echo "Keeping remote access session active..."
+          echo "Press Ctrl+C in the Actions tab to terminate early"
+          
+          # Keep alive with periodic status updates
+          START_TIME=$(date +%s)
+          DURATION=21600  # 6 hours in seconds
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            REMAINING=$((DURATION - ELAPSED))
+            
+            if [ $REMAINING -le 0 ]; then
+              echo "Session timeout reached. Terminating..."
+              break
+            fi
+            
+            HOURS=$((REMAINING / 3600))
+            MINUTES=$(((REMAINING % 3600) / 60))
+            
+            echo "Session active - Time remaining: ${HOURS}h ${MINUTES}m"
+            echo "Tailscale IP: $TAILSCALE_IP"
+            
+            # Check if Tailscale is still connected
+            if ! tailscale status >/dev/null 2>&1; then
+              echo "::warning::Tailscale connection lost, attempting to reconnect..."
+              sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }} --accept-dns=false
+            fi
+            
+            sleep 300  # Status update every 5 minutes
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up..."
+          sudo tailscale logout 2>/dev/null || true
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop 2>/dev/null || true
+          echo "Cleanup completed"
