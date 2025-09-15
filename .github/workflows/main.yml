@@ -1,18 +1,10 @@
-name: Remote Access (SSH + VNC Tunnel)
+name: VNC Access via Tailscale (Optimized)
 
 on:
   workflow_dispatch:
     inputs:
-      ssh_user:
-        description: 'SSH User'
-        required: true
-        default: 'runner'
-      ssh_port:
-        description: 'SSH Port'
-        required: true
-        default: '22'
       vnc_password:
-        description: 'VNC Password'
+        description: 'VNC Password (Alphanumeric only)'
         required: true
         default: 'vnc123456'
 
@@ -25,63 +17,60 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Ngrok and Enable SSH
-        env:
-          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+      - name: Install Tailscale
         run: |
-          # Download and install ngrok
-          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-amd64.zip
-          unzip ngrok-stable-darwin-amd64.zip
-          sudo mv ngrok /usr/local/bin/
+          brew install tailscale
+
+      - name: Start Tailscale Service and Connect
+        env:
+          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          # Start the Tailscale daemon in the background
+          sudo tailscaled &
           
-          # Authenticate ngrok
-          ngrok config add-authtoken $NGROK_TOKEN
+          # Wait a few seconds for the service to start
+          sleep 5
           
-          # Enable SSH server
-          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
+          # Authenticate and connect
+          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
+          
+          # Wait for the IP to be assigned
+          sleep 10
+          
+          TS_IP=$(tailscale ip -4)
+          
+          if [[ -z "$TS_IP" ]]; then
+            echo "::error::Failed to get Tailscale IP. Exiting."
+            exit 1
+          fi
+          
+          echo "Assigned Tailscale IP: $TS_IP"
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
       - name: Enable and Secure VNC Server
         run: |
           # Dừng dịch vụ VNC hiện tại để cấu hình lại
           sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
 
-          # Cấu hình quyền truy cập và mật khẩu VNC
+          # Cấu hình quyền truy cập và mật khẩu
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "${{ github.event.inputs.vnc_password }}"
 
-          # Khởi động lại dịch vụ VNC
+          # Khởi động lại dịch vụ VNC một cách sạch sẽ
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
 
-      - name: Start SSH Tunnel and Display URLs
+      - name: Display Connection Details
         run: |
-          # Start the ngrok tunnel for SSH in the background
-          ngrok tcp 22 > ngrok.log &
-          
-          # Wait for the ngrok agent to be ready
-          sleep 5
-          
-          # Get the public URL from the ngrok API
-          public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          
-          if [[ -z "$public_url" || "$public_url" == "null" ]]; then
-            echo "::error::Failed to get a public URL from ngrok. Check ngrok.log for details."
-            cat ngrok.log
-            exit 1
-          fi
-
           echo "========================================"
-          echo "       SSH + VNC Tunnel Access"
+          echo "       VNC Access via Tailscale"
           echo "========================================"
-          echo "1. SSH Tunnel Address:"
-          echo "$public_url"
-          echo ""
-          echo "2. VNC Tunneling (After SSH):"
-          echo "   ssh -L 5900:localhost:5900 runner@$(echo "$public_url" | sed 's/tcp:\/\///' | cut -d':' -f1) -p $(echo "$public_url" | sed 's/tcp:\/\///' | cut -d':' -f2)"
-          echo ""
-          echo "VNC Username: runner"
+          echo "Connect to your runner using a VNC client:"
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: runner"
           echo "VNC Password: ${{ github.event.inputs.vnc_password }}"
           echo "========================================"
+          echo "The runner will stay active for 6 hours."
 
       - name: Maintain Connection
         run: |
