@@ -11,7 +11,7 @@ on:
 jobs:
   remote_access:
     runs-on: macos-latest
-    timeout-minutes: 3600 # 6 hours
+    timeout-minutes: 3600
 
     steps:
       - name: Checkout repository
@@ -19,32 +19,33 @@ jobs:
 
       - name: Enable VNC Server on macOS Runner
         run: |
-          # Enable VNC server, allow all users to access with all privileges
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
           
-          # Set VNC password directly
           echo "${{ github.event.inputs.vnc_password }}" | sudo perl -we 'BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA"}; $_ = <>; chomp; s/^(.{8})./$1/; @p = unpack "C", $; foreach (@k) { printf "%02X", $ ^ (shift @p || 0) }; print "\n"' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt
 
       - name: Install Tailscale
         run: |
-          # Install the Tailscale CLI on macOS
           brew install tailscale
 
-      - name: Connect to Tailscale Network
+      - name: Start Tailscale Service and Connect
         env:
           TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Authenticate and connect to your Tailscale network
+          # Start the Tailscale daemon in the background
+          sudo tailscaled &
+          
+          # Wait a few seconds for the service to start
+          sleep 5
+          
+          # Authenticate and connect
           sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
           
-          # Wait a few seconds for Tailscale to get an IP
+          # Wait for the IP to be assigned
           sleep 10
           
-          # Get the assigned Tailscale IP address
           TS_IP=$(tailscale ip -4)
           
-          # Check if IP was assigned
           if [[ -z "$TS_IP" ]]; then
             echo "::error::Failed to get Tailscale IP. Exiting."
             exit 1
@@ -56,7 +57,7 @@ jobs:
       - name: Display Connection Details
         run: |
           echo "========================================"
-          echo "   VNC Access Via Tailscale"
+          echo "       VNC Access Via Tailscale"
           echo "========================================"
           echo "Connect to your runner using a VNC client:"
           echo "Address: $TAILSCALE_IP"
@@ -67,4 +68,4 @@ jobs:
       - name: Maintain Connection
         run: |
           echo "Keeping job alive..."
-          sleep 21600 # Wait for 6 hours (60 * 60 * 6 = 21600 seconds)
+          sleep 21600
