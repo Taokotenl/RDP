@@ -1,0 +1,46 @@
+name: Remote Access via Ngrok
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_user:
+        description: 'SSH User (e.g., runner)'
+        required: true
+        default: 'runner'
+      ssh_port:
+        description: 'SSH Port'
+        required: true
+        default: '22'
+
+jobs:
+  remote_access:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Ngrok and SSH
+        uses: pratik-chouhan/ngrok-tunnel-action@v1.2.0
+        with:
+          ngrok_token: ${{ secrets.NGROK_TOKEN }}
+          server_address: 0.0.0.0:22 # Target the SSH port on the runner
+          protocol: 'tcp'
+          ngrok_name: 'github-runner'
+          public_host: false
+
+      - name: Display Ngrok URL
+        run: |
+          tunnel_info=$(curl -s http://localhost:4040/api/tunnels/github-runner)
+          public_url=$(echo $tunnel_info | jq -r '.public_url')
+          host=$(echo $public_url | sed 's/tcp:\/\///' | cut -d':' -f1)
+          port=$(echo $public_url | sed 's/tcp:\/\///' | cut -d':' -f2)
+
+          echo "Connect to your runner using:"
+          echo "ssh ${{ github.event.inputs.ssh_user }}@$host -p $port"
+          echo "The runner will stay active for 6 hours unless the job is canceled."
+
+      - name: Keep job running
+        run: |
+          echo "Keeping job alive..."
+          sleep 21600 # Wait for 6 hours (60 * 60 * 6 = 21600 seconds)
