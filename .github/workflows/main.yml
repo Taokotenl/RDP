@@ -1,0 +1,60 @@
+name: Remote Access via AnyDesk (MacOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      anydesk_password:
+        description: 'AnyDesk Password (Alphanumeric only)'
+        required: true
+        default: 'vtri123'
+
+jobs:
+  remote_access:
+    runs-on: macos-latest
+    timeout-minutes: 3600 # 6 hours
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install AnyDesk
+        run: |
+          # Install AnyDesk using Homebrew
+          brew install anydesk
+          
+      - name: Configure AnyDesk and Get ID
+        run: |
+          # Dừng dịch vụ AnyDesk nếu nó đang chạy
+          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --stop-service || true
+          
+          # Khởi động dịch vụ AnyDesk và thiết lập mật khẩu
+          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password ${{ github.event.inputs.anydesk_password }} --silent-install
+          
+          # Đợi vài giây để dịch vụ khởi động
+          sleep 5
+          
+          # Lấy ID của phiên làm việc
+          anydesk_id=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id)
+          
+          if [[ -z "$anydesk_id" ]]; then
+            echo "::error::Failed to get AnyDesk ID. Exiting."
+            exit 1
+          fi
+
+          echo "ANYDESK_ID=$anydesk_id" >> $GITHUB_ENV
+
+      - name: Display Connection Details
+        run: |
+          echo "========================================"
+          echo "       AnyDesk Access"
+          echo "========================================"
+          echo "Connect using AnyDesk client:"
+          echo "ID: $ANYDESK_ID"
+          echo "Password: ${{ github.event.inputs.anydesk_password }}"
+          echo "========================================"
+          echo "The runner will stay active for 6 hours."
+
+      - name: Maintain Connection
+        run: |
+          echo "Keeping job alive..."
+          sleep 21600
