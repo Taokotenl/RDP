@@ -1,4 +1,4 @@
-name: Remote Access via AnyDesk (MacOS)
+name: Remote Access via AnyDesk (MacOS) - Optimized
 
 on:
   workflow_dispatch:
@@ -17,11 +17,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AnyDesk
+      - name: Check and Install AnyDesk
+        id: install_anydesk
         run: |
-          # Install AnyDesk using Homebrew
-          brew install anydesk
-          
+          if [ -d "/Applications/AnyDesk.app" ]; then
+            echo "AnyDesk already installed. Skipping installation."
+            echo "::set-output name=status::skipped"
+          else
+            echo "Installing AnyDesk..."
+            brew install anydesk
+            echo "::set-output name=status::installed"
+          fi
+
       - name: Configure AnyDesk and Get ID
         run: |
           # Dừng dịch vụ AnyDesk nếu nó đang chạy
