@@ -42,8 +42,8 @@ jobs:
           # Dừng dịch vụ VNC hiện tại
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
 
-          # Tạo mật khẩu VNC ngẫu nhiên và an toàn
-          VNC_PASSWORD=$(pwgen -s 12 1)
+          # Tạo mật khẩu VNC ngẫu nhiên bằng OpenSSL
+          VNC_PASSWORD=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-12)
           
           # Cấu hình mật khẩu VNC mới
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
