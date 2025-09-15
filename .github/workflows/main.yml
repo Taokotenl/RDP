@@ -1,4 +1,4 @@
-name: Remote Access via AnyDesk (MacOS) - Optimized
+name: Remote Access via AnyDesk (MacOS) - Final
 
 on:
   workflow_dispatch:
@@ -17,30 +17,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install lsb-release
+        run: brew install lsb-release
+
       - name: Check and Install AnyDesk
         id: install_anydesk
         run: |
           if [ -d "/Applications/AnyDesk.app" ]; then
             echo "AnyDesk already installed. Skipping installation."
-            echo "::set-output name=status::skipped"
           else
             echo "Installing AnyDesk..."
             brew install anydesk
-            echo "::set-output name=status::installed"
           fi
 
       - name: Configure AnyDesk and Get ID
         run: |
-          # Dừng dịch vụ AnyDesk nếu nó đang chạy
           sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --stop-service || true
           
-          # Khởi động dịch vụ AnyDesk và thiết lập mật khẩu
           sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password ${{ github.event.inputs.anydesk_password }} --silent-install
           
-          # Đợi vài giây để dịch vụ khởi động
           sleep 5
           
-          # Lấy ID của phiên làm việc
           anydesk_id=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id)
           
           if [[ -z "$anydesk_id" ]]; then
