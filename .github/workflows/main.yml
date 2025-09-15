@@ -1,4 +1,4 @@
-name: Remote Access via Tailscale (VNC) - Secure
+name: Remote Access via Tailscale (VNC) - Final
 
 on:
   workflow_dispatch:
@@ -64,7 +64,7 @@ jobs:
           echo "Connect to your runner using a VNC client:"
           echo "Address: $TAILSCALE_IP"
           echo "Port: 5900"
-          echo "Username: runner"
+          echo "Username: (Leave this blank)"
           echo "VNC Password: $VNC_PASSWORD"
           echo "========================================"
           echo "The runner will stay active for 6 hours."
