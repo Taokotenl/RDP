@@ -1,4 +1,4 @@
-name: Remote Access via Tailscale (VNC) - Final
+name: Remote Access via Tailscale (VNC) - Fixed
 
 on:
   workflow_dispatch:
@@ -22,49 +22,44 @@ jobs:
         run: |
           sudo tailscaled &
           sleep 5
-          
           sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
-          
           sleep 10
-          
           TS_IP=$(tailscale ip -4)
-          
           if [[ -z "$TS_IP" ]]; then
             echo "::error::Failed to get Tailscale IP. Exiting."
             exit 1
           fi
-          
           echo "Assigned Tailscale IP: $TS_IP"
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Enable and Secure VNC Server
+      - name: Enable and Secure VNC Server (Password only)
         run: |
-          # Dừng dịch vụ VNC hiện tại
+          # Stop ARD if already running
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
-
-          # Tạo mật khẩu VNC ngẫu nhiên bằng OpenSSL
-          VNC_PASSWORD=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-12)
           
-          # Cấu hình mật khẩu VNC mới
+          # Generate 8-char VNC password (alphanumeric only)
+          VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
+
+          # Enable ARD with legacy VNC password auth
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
 
-          # Lưu mật khẩu VNC vào biến môi trường
+          # Save password to env
           echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
 
-          # Khởi động lại dịch vụ VNC
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -restart
+          # Restart ARD service
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -activate
 
       - name: Display Connection Details
         run: |
           echo "========================================"
           echo "       VNC Access via Tailscale"
           echo "========================================"
-          echo "Connect to your runner using a VNC client:"
+          echo "Connect with any VNC client:"
           echo "Address: $TAILSCALE_IP"
           echo "Port: 5900"
-          echo "Username: (Leave this blank)"
+          echo "Username: (leave blank)"
           echo "VNC Password: $VNC_PASSWORD"
           echo "========================================"
           echo "The runner will stay active for 6 hours."
