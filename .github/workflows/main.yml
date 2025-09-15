@@ -1,4 +1,4 @@
-name: Remote Access via Ngrok (VNC) v2
+name: Remote Access via Ngrok (VNC) v3
 
 on:
   workflow_dispatch:
@@ -44,24 +44,31 @@ jobs:
       - name: Start Ngrok Tunnel and Display URL
         id: ngrok
         run: |
-          # Start the ngrok tunnel and redirect output to a log file
+          # Start the ngrok tunnel in the background
           ngrok tcp 5900 > ngrok.log &
           
-          # Wait for the ngrok agent to be ready and create the tunnel
-          timeout 30s bash -c 'until curl -s http://localhost:4040/api/tunnels; do sleep 1; done'
+          # Loop and wait for the ngrok agent to be ready
+          attempt_counter=0
+          max_attempts=15
+          public_url=""
+
+          until [ "$public_url" != "" ]; do
+            if [ ${attempt_counter} -eq ${max_attempts} ];then
+              echo "Max attempts reached. Failed to get a public URL from ngrok."
+              echo "::error::Failed to get a public URL from ngrok. Check ngrok.log for details."
+              cat ngrok.log
+              exit 1
+            fi
+            
+            sleep 2
+            public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+            attempt_counter=$(($attempt_counter+1))
+          done
           
-          # Get the public URL from the ngrok API
-          public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-          
-          if [[ -z "$public_url" || "$public_url" == "null" ]]; then
-            echo "::error::Failed to get a public URL from ngrok. Check ngrok.log for details."
-            cat ngrok.log
-            exit 1
-          else
-            echo "Connect to your runner using your VNC client:"
-            echo "$public_url"
-            echo "The VNC password is: ${{ github.event.inputs.vnc_password }}"
-          fi
+          echo "Connect to your runner using your VNC client:"
+          echo "$public_url"
+          echo "The VNC password is: ${{ github.event.inputs.vnc_password }}"
+          echo "The runner will stay active for 6 hours unless the job is canceled."
 
       - name: Keep job running
         run: |
