@@ -1,70 +1,87 @@
-name: Remote Access via AnyDesk (MacOS) - Manual Install
+name: Remote Access (SSH + VNC Tunnel)
 
 on:
   workflow_dispatch:
     inputs:
-      anydesk_password:
-        description: 'AnyDesk Password (Alphanumeric only)'
+      ssh_user:
+        description: 'SSH User'
         required: true
-        default: 'vtri123'
+        default: 'runner'
+      ssh_port:
+        description: 'SSH Port'
+        required: true
+        default: '22'
+      vnc_password:
+        description: 'VNC Password'
+        required: true
+        default: 'vnc123456'
 
 jobs:
   remote_access:
     runs-on: macos-latest
-    timeout-minutes: 3600 # 6 hours
+    timeout-minutes: 3600
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AnyDesk
+      - name: Install Ngrok and Enable SSH
+        env:
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
         run: |
-          # Tải file .dmg của AnyDesk
-          curl -L "https://download.anydesk.com/anydesk.dmg" --output "AnyDesk.dmg"
+          # Download and install ngrok
+          curl -O https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-darwin-amd64.zip
+          unzip ngrok-stable-darwin-amd64.zip
+          sudo mv ngrok /usr/local/bin/
+          
+          # Authenticate ngrok
+          ngrok config add-authtoken $NGROK_TOKEN
+          
+          # Enable SSH server
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist
 
-          # Mount file .dmg
-          sudo hdiutil attach AnyDesk.dmg
-
-          # Chạy trình cài đặt
-          sudo installer -pkg /Volumes/AnyDesk/AnyDesk.pkg -target /
-
-          # Ngắt kết nối .dmg
-          sudo hdiutil detach /Volumes/AnyDesk
-
-          # Xóa file .dmg đã tải về
-          rm AnyDesk.dmg
-
-      - name: Configure AnyDesk and Get ID
+      - name: Enable and Secure VNC Server
         run: |
-          # Dừng dịch vụ AnyDesk nếu nó đang chạy
-          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --stop-service || true
+          # Dừng dịch vụ VNC hiện tại để cấu hình lại
+          sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+
+          # Cấu hình quyền truy cập và mật khẩu VNC
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "${{ github.event.inputs.vnc_password }}"
+
+          # Khởi động lại dịch vụ VNC
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+
+      - name: Start SSH Tunnel and Display URLs
+        run: |
+          # Start the ngrok tunnel for SSH in the background
+          ngrok tcp 22 > ngrok.log &
           
-          # Khởi động dịch vụ AnyDesk và thiết lập mật khẩu
-          sudo /Applications/AnyDesk.app/Contents/MacOS/AnyDesk --set-password ${{ github.event.inputs.anydesk_password }} --silent-install
-          
-          # Đợi vài giây để dịch vụ khởi động
+          # Wait for the ngrok agent to be ready
           sleep 5
           
-          # Lấy ID của phiên làm việc
-          anydesk_id=$(/Applications/AnyDesk.app/Contents/MacOS/AnyDesk --get-id)
+          # Get the public URL from the ngrok API
+          public_url=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
           
-          if [[ -z "$anydesk_id" ]]; then
-            echo "::error::Failed to get AnyDesk ID. Exiting."
+          if [[ -z "$public_url" || "$public_url" == "null" ]]; then
+            echo "::error::Failed to get a public URL from ngrok. Check ngrok.log for details."
+            cat ngrok.log
             exit 1
           fi
 
-          echo "ANYDESK_ID=$anydesk_id" >> $GITHUB_ENV
-
-      - name: Display Connection Details
-        run: |
           echo "========================================"
-          echo "       AnyDesk Access"
+          echo "       SSH + VNC Tunnel Access"
           echo "========================================"
-          echo "Connect using AnyDesk client:"
-          echo "ID: $ANYDESK_ID"
-          echo "Password: ${{ github.event.inputs.anydesk_password }}"
+          echo "1. SSH Tunnel Address:"
+          echo "$public_url"
+          echo ""
+          echo "2. VNC Tunneling (After SSH):"
+          echo "   ssh -L 5900:localhost:5900 runner@$(echo "$public_url" | sed 's/tcp:\/\///' | cut -d':' -f1) -p $(echo "$public_url" | sed 's/tcp:\/\///' | cut -d':' -f2)"
+          echo ""
+          echo "VNC Username: runner"
+          echo "VNC Password: ${{ github.event.inputs.vnc_password }}"
           echo "========================================"
-          echo "The runner will stay active for 6 hours."
 
       - name: Maintain Connection
         run: |
