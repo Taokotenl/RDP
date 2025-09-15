@@ -17,22 +17,25 @@ jobs:
           echo "Installing Tailscale..."
           brew install tailscale
           
-      - name: Create user account for VNC
+      - name: Configure macOS for VNC Access
         run: |
-          # Create a temporary user for VNC access
-          sudo dscl . -create /Users/vncuser
-          sudo dscl . -create /Users/vncuser UserShell /bin/bash
-          sudo dscl . -create /Users/vncuser RealName "VNC User"
-          sudo dscl . -create /Users/vncuser UniqueID 1001
-          sudo dscl . -create /Users/vncuser PrimaryGroupID 80
-          sudo dscl . -create /Users/vncuser NFSHomeDirectory /Users/vncuser
-          sudo createhomedir -c -u vncuser
+          echo "Configuring macOS for remote access..."
           
-          # Set password for the user
-          echo "vncuser:$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)" | sudo chpasswd
+          # Enable automatic login for current user to avoid login screen
+          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
           
-          # Add user to admin group for full access
-          sudo dscl . -append /Groups/admin GroupMembership vncuser
+          # Disable screen lock and sleep
+          sudo pmset -a displaysleep 0
+          sudo pmset -a sleep 0
+          sudo pmset -a disksleep 0
+          
+          # Disable screen saver
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          
+          # Show desktop (in case it's hidden)
+          osascript -e 'tell application "System Events" to key code 120' 2>/dev/null || true
+          
+          echo "macOS configured for remote access"
 
       - name: Start Tailscale Service and Connect
         env:
@@ -86,45 +89,64 @@ jobs:
           VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-12)
           echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
           
-          # Stop any existing ARD/VNC services
-          sudo launchctl unload /System/Library/LaunchDaemons/com.apple.RemoteDesktop.privileged_helper.plist 2>/dev/null || true
-          sudo launchctl unload /System/Library/LaunchAgents/com.apple.RemoteDesktop.agent.plist 2>/dev/null || true
-          
-          # Configure Screen Sharing (VNC)
+          # Method 1: Try using kickstart (more reliable)
+          echo "Attempting to configure VNC using kickstart..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -configure -allowAccessFor -allUsers -privs -all \
+            -activate -configure -access -on -privs -all -restart \
             -configure -clientopts -setvnclegacy -vnclegacy yes \
-            -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD" \
-            -activate -restart -console
+            -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD" || {
+            
+            echo "Kickstart failed, trying alternative method..."
+            
+            # Method 2: Enable Screen Sharing via System Preferences
+            sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+            
+            # Set VNC password using system method
+            echo "$VNC_PASSWORD" | sudo /usr/bin/vncpasswd -service
+          }
           
-          # Enable Screen Sharing service
-          sudo launchctl load /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          # Wait for VNC service to start
+          echo "Waiting for VNC service to start..."
+          for i in {1..30}; do
+            if lsof -i :5900 >/dev/null 2>&1; then
+              echo "VNC server is running on port 5900"
+              break
+            fi
+            echo "Waiting for VNC server... ($i/30)"
+            sleep 2
+          done
           
-          # Wait for VNC to start
-          sleep 10
-          
-          # Verify VNC is listening
-          if lsof -i :5900 > /dev/null; then
-            echo "VNC server is running on port 5900"
-          else
-            echo "::warning::VNC server may not be running properly"
+          # If still not running, try manual approach
+          if ! lsof -i :5900 >/dev/null 2>&1; then
+            echo "Trying manual VNC setup..."
+            sudo launchctl load /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+            sleep 5
           fi
 
       - name: Configure macOS UI Access
         run: |
-          # Enable accessibility features for better remote control
-          sudo sqlite3 /Library/Application\ Support/com.apple.TCC/TCC.db \
-            "INSERT OR REPLACE INTO access VALUES('kTCCServiceAccessibility','com.apple.RemoteDesktop.agent',0,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,1541440109);" 2>/dev/null || true
+          echo "Configuring UI accessibility..."
           
-          # Prevent sleep and screen saver
-          sudo pmset -a displaysleep 0
-          sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
+          # Enable remote management and screen sharing
+          sudo systemsetup -setremotelogin on 2>/dev/null || true
           
-          # Disable screen saver
-          defaults -currentHost write com.apple.screensaver idleTime 0
+          # Try to enable Screen Sharing via preferences
+          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
           
-          echo "UI access configured"
+          # Alternative VNC setup if previous methods failed
+          if ! lsof -i :5900 >/dev/null 2>&1; then
+            echo "Setting up VNC using alternative method..."
+            
+            # Create VNC configuration
+            sudo mkdir -p /Library/Preferences/com.apple.VNCSettings.txt
+            echo "$(echo -n "$VNC_PASSWORD" | openssl dgst -md5 -binary | base64)" | sudo tee /var/db/vncserver/vncpasswd >/dev/null 2>&1 || true
+            
+            # Enable VNC via command line
+            sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off 2>/dev/null || true
+            sudo /usr/bin/killall -HUP mDNSResponder 2>/dev/null || true
+          fi
+          
+          echo "UI access configuration completed"
 
       - name: Display Connection Information
         run: |
