@@ -151,7 +151,7 @@ jobs:
       - name: Display Connection Information
         run: |
           echo "========================================"
-          echo "    🖥️  VNC Remote Access Ready"
+          echo "    🖥️  VNC Remote Access Setup Complete"
           echo "========================================"
           echo ""
           echo "Connection Details:"
@@ -161,14 +161,32 @@ jobs:
           echo ""
           echo "How to Connect:"
           echo "1. Make sure you're connected to the same Tailscale network"
-          echo "2. Use any VNC client (e.g., RealVNC, TightVNC, built-in Screen Sharing)"
-          echo "3. Connect to: vnc://$TAILSCALE_IP:5900"
-          echo "4. Enter the password when prompted: $VNC_PASSWORD"
+          echo "2. Use any VNC client (RealVNC, TightVNC, macOS Screen Sharing)"
+          echo "3. Connect to: $TAILSCALE_IP:5900"
+          echo "4. Enter password: $VNC_PASSWORD"
           echo ""
-          echo "Tailscale Network Status:"
-          tailscale status | head -10
+          echo "Alternative connection strings:"
+          echo "• vnc://$TAILSCALE_IP:5900"
+          echo "• $TAILSCALE_IP:0 (display 0)"
+          echo ""
+          echo "Network Status:"
+          tailscale status 2>/dev/null | head -5 || echo "Tailscale status unavailable"
+          echo ""
+          echo "Services Status:"
+          if lsof -i :5900 >/dev/null 2>&1; then
+            echo "✅ VNC Server: Running"
+          else
+            echo "⚠️  VNC Server: May not be running (check connection anyway)"
+          fi
+          
+          if pgrep -x tailscaled >/dev/null; then
+            echo "✅ Tailscale: Connected"
+          else
+            echo "❌ Tailscale: Not running"
+          fi
           echo ""
           echo "🕒 Session will remain active for 6 hours"
+          echo "🛑 Cancel workflow in GitHub Actions to terminate early"
           echo "========================================"
 
       - name: Keep Session Active
