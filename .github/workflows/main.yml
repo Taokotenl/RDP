@@ -1,4 +1,4 @@
-name: VNC Access via Tailscale (Optimized)
+name: Remote Access via Tailscale (VNC) - Final
 
 on:
   workflow_dispatch:
@@ -49,16 +49,16 @@ jobs:
 
       - name: Enable and Secure VNC Server
         run: |
-          # Dừng dịch vụ VNC hiện tại để cấu hình lại
-          sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
+          # Dừng dịch vụ VNC bằng cách tắt nó
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
 
           # Cấu hình quyền truy cập và mật khẩu
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -allUsers -privs -all
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "${{ github.event.inputs.vnc_password }}"
 
-          # Khởi động lại dịch vụ VNC một cách sạch sẽ
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+          # Khởi động lại dịch vụ VNC bằng cách kích hoạt lại
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -restart
 
       - name: Display Connection Details
         run: |
@@ -67,6 +67,7 @@ jobs:
           echo "========================================"
           echo "Connect to your runner using a VNC client:"
           echo "Address: $TAILSCALE_IP"
+          echo "Port: 5900"
           echo "Username: runner"
           echo "VNC Password: ${{ github.event.inputs.vnc_password }}"
           echo "========================================"
