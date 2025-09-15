@@ -35,23 +35,24 @@ jobs:
       - name: Install GUI packages (XQuartz + TigerVNC)
         run: |
           brew install --cask xquartz
-          brew install tigervnc
+          brew install tiger-vnc
 
       - name: Configure & Start Virtual Desktop with VNC
         run: |
           # Generate 8-char VNC password
           VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
+          mkdir -p ~/.vnc
           echo $VNC_PASSWORD > ~/.vncpass
           vncpasswd -f < ~/.vncpass > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
           rm ~/.vncpass
 
           # Start Xvfb (virtual framebuffer for GUI)
-          /usr/X11/bin/Xvfb :1 -screen 0 1280x800x24 &
+          Xvfb :1 -screen 0 1280x800x24 &
           sleep 5
 
-          # Start a lightweight window manager (twm from XQuartz)
-          DISPLAY=:1 /usr/X11/bin/twm &
+          # Start a lightweight window manager
+          DISPLAY=:1 twm &
 
           # Start TigerVNC server
           vncserver :1 -rfbport 5900 -PasswordFile ~/.vnc/passwd
@@ -71,7 +72,7 @@ jobs:
           echo "Username: (leave blank)"
           echo "========================================"
           echo "NOTE: This is a virtual X11 desktop (not macOS Finder)."
-          echo "The runner will stay alive for 6 hours."
+          echo "You will see a minimal X11 window manager (twm)."
           echo "========================================"
 
       - name: Keep Alive
