@@ -1,0 +1,97 @@
+name: RDP for macOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-remote-access:
+    runs-on: macos-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Install and configure macOS Screen Sharing
+        run: |
+          # Enable Screen Sharing (VNC)
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+          
+          # Create user with secure token (proper method for recent macOS)
+          if ! id -u VTriP &>/dev/null; then
+            sudo dscl . -create /Users/VTriP
+            sudo dscl . -create /Users/VTriP UserShell /bin/bash
+            sudo dscl . -create /Users/VTriP RealName "VTriP User"
+            sudo dscl . -create /Users/VTriP UniqueID 502
+            sudo dscl . -create /Users/VTriP PrimaryGroupID 20
+            sudo dscl . -create /Users/VTriP NFSHomeDirectory /Users/VTriP
+            sudo dscl . -passwd /Users/VTriP v137@com
+            sudo createhomedir -c -u VTriP
+          else
+            sudo dscl . -passwd /Users/VTriP v137@com
+          fi
+          
+          # Enable remote access for the user
+          sudo dseditgroup -o edit -a VTriP -t user com.apple.access_screensharing
+          sudo dseditgroup -o edit -a VTriP -t user com.apple.access_remote-desktop
+
+      - name: Configure macOS firewall for VNC
+        run: |
+          # Allow VNC (port 5900)
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/MacOS/ARDAgent
+          
+          # Also allow standard VNC port
+          sudo networksetup -setpfallowstealthmode off
+          sudo networksetup -setallowstealthmode off
+
+      - name: Set macOS login/welcome message
+        run: |
+          sudo defaults write /Library/Preferences/com.apple.loginwindow LoginwindowText "macOS VM | VTriP Syntary Client | Online 6 Hours"
+
+      - name: Install Tailscale
+        run: |
+          # Download and install Tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # Start Tailscale
+          sudo tailscaled --state=mem: &
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Authenticate with Tailscale
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-macos-runner-$GITHUB_RUN_ID
+          
+          # Get Tailscale IP
+          TS_IP=$(sudo tailscale ip -4)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "Assigned Tailscale IP: $TS_IP"
+
+      - name: Verify VNC Accessibility
+        run: |
+          # Check if VNC port is accessible
+          sleep 10
+          if nc -z -v -G 5 127.0.0.1 5900; then
+            echo "VNC connection successful!"
+          else
+            echo "VNC connection failed - but continuing anyway"
+          fi
+
+      - name: Display Connection Information
+        run: |
+          echo ""
+          echo "=== REMOTE ACCESS INFORMATION ==="
+          echo "Protocol: VNC (macOS Screen Sharing)"
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: VTriP"
+          echo "Password: v137@com"
+          echo "Port: 5900"
+          echo "================================="
+          echo ""
+          echo "Use any VNC client to connect, or macOS Screen Sharing app"
+
+      - name: Maintain Connection
+        run: |
+          echo "Keeping the runner active for remote access..."
+          # Simple keep-alive loop
+          while true; do
+            echo "[$(date)] Remote access active - Use Ctrl+C in workflow to terminate"
+            sleep 300
+          done
