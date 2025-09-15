@@ -1,178 +1,103 @@
-name: Remote Access via Tailscale (VNC) - Improved
+name: RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  remote_access:
-    runs-on: macos-latest
-    timeout-minutes: 360  # 6 hours
+  secure-rdp:
+    runs-on: windows-2025
+    timeout-minutes: 3600
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule protocol=TCP localport=3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+          netstat -an | findstr 3389
+
+      - name: Create RDP User with Fixed Credentials
+        run: |
+          $Username = "VTriP"
+          $PlainPassword = "v137@com"
+          $SecurePassword = ConvertTo-SecureString $PlainPassword -AsPlainText -Force
+          if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name $Username -Password $SecurePassword -AccountNeverExpires
+              Add-LocalGroupMember -Group "Administrators" -Member $Username
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username
+          }
+          echo "RDP_CREDS=User: $Username | Password: $PlainPassword" >> $env:GITHUB_ENV
+
+      - name: Set System Welcome Message (Legal Notice)
+        run: |
+          $caption = "VTriP Syntary Client"
+          $message = "=========================================`n    Windows VM | VTriP Syntary Client`n    Online 6 Hours`n========================================="
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LegalNoticeCaption" -Value $caption
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LegalNoticeText" -Value $message
+
+      - name: Remove Pre-installed Apps
+        run: |
+          $epicPath = "${env:ProgramFiles}\Epic Games"
+          if (Test-Path $epicPath) {
+              Remove-Item -Path $epicPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $unityPath = "${env:ProgramFiles}\Unity Hub"
+          if (Test-Path $unityPath) {
+              Remove-Item -Path $unityPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          $desktopPath = [Environment]::GetFolderPath("Desktop")
+          $startMenuPath = [Environment]::GetFolderPath("StartMenu")
+          Remove-Item -Path "$desktopPath\Epic Games Launcher.lnk" -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "$desktopPath\Unity Hub.lnk" -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "$startMenuPath\Programs\Epic Games Launcher.lnk" -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "$startMenuPath\Programs\Unity Hub.lnk" -Force -ErrorAction SilentlyContinue
 
       - name: Install Tailscale
         run: |
-          echo "Installing Tailscale..."
-          brew install tailscale
-          
-      - name: Configure macOS for VNC Access
-        run: |
-          echo "Configuring macOS for remote access..."
-          
-          # Enable automatic login for current user to avoid login screen
-          sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser runner
-          
-          # Disable screen lock and sleep
-          sudo pmset -a displaysleep 0
-          sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
-          
-          # Disable screen saver
-          defaults -currentHost write com.apple.screensaver idleTime 0
-          
-          # Show desktop (in case it's hidden)
-          osascript -e 'tell application "System Events" to key code 120' 2>/dev/null || true
-          
-          echo "macOS configured for remote access"
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Start Tailscale Service and Connect
-        env:
-          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      - name: Establish Tailscale Connection
         run: |
-          echo "Starting Tailscale daemon..."
-          # Start daemon with default settings (like the working version)
-          sudo tailscaled &
-          
-          # Wait for daemon to start
-          echo "Waiting for Tailscale daemon to start..."
-          sleep 5
-          
-          echo "Connecting to Tailscale network..."
-          sudo tailscale up --authkey=$TS_AUTH_KEY --hostname=gh-macos-runner-${{ github.run_id }}
-          
-          # Wait and get IP
-          echo "Waiting for IP assignment..."
-          sleep 10
-          
-          TS_IP=$(tailscale ip -4)
-          if [[ -z "$TS_IP" ]]; then
-            echo "::error::Failed to get Tailscale IP. Checking status..."
-            tailscale status
-            exit 1
-          fi
-          
-          echo "Successfully connected to Tailscale"
-          echo "Assigned Tailscale IP: $TS_IP"
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          Write-Host "Assigned Tailscale IP: $tsIP"
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Configure VNC Server
+      - name: Verify RDP Accessibility
         run: |
-          echo "Configuring VNC server..."
-          
-          # Stop ARD if already running
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
-          
-          # Generate VNC password (same as working version)
-          VNC_PASSWORD=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9' | cut -c1-8)
-          echo "VNC_PASSWORD=$VNC_PASSWORD" >> $GITHUB_ENV
-          
-          # Enable ARD with legacy VNC password auth (same as working version)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -privs -all
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
-          
-          # Restart ARD service
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -activate
-          
-          echo "VNC server configured successfully"
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-      - name: Configure macOS UI Access
+      - name: Maintain Connection
         run: |
-          echo "Configuring additional UI settings..."
-          
-          # Disable sleep and screen saver for better remote access
-          sudo pmset -a displaysleep 0
-          sudo pmset -a sleep 0
-          sudo pmset -a disksleep 0
-          
-          # Disable screen saver
-          defaults -currentHost write com.apple.screensaver idleTime 0
-          
-          # Ensure remote login is enabled (usually already on)
-          sudo systemsetup -setremotelogin on 2>/dev/null || true
-          
-          echo "UI settings configured successfully"
-
-      - name: Display Connection Information
-        run: |
-          echo "========================================"
-          echo "       VNC Access via Tailscale"
-          echo "========================================"
-          echo "Connect with any VNC client:"
-          echo "Address: $TAILSCALE_IP"
-          echo "Port: 5900"
-          echo "Username: (leave blank)"
-          echo "VNC Password: $VNC_PASSWORD"
-          echo "========================================"
-          echo "Additional connection info:"
-          echo "• vnc://$TAILSCALE_IP:5900"
-          echo "• $TAILSCALE_IP:0 (display 0)"
-          echo ""
-          echo "Network Status:"
-          tailscale status 2>/dev/null | head -5 || echo "Status check failed"
-          echo ""
-          echo "The runner will stay active for 6 hours."
-          echo "========================================"
-
-      - name: Keep Session Active
-        run: |
-          echo "Keeping remote access session active..."
-          echo "Press Cancel workflow button in GitHub Actions to terminate early"
-          
-          # Simple keep-alive like the working version
-          START_TIME=$(date +%s)
-          DURATION=21600  # 6 hours in seconds
-          
-          while true; do
-            CURRENT_TIME=$(date +%s)
-            ELAPSED=$((CURRENT_TIME - START_TIME))
-            REMAINING=$((DURATION - ELAPSED))
-            
-            if [ $REMAINING -le 0 ]; then
-              echo "Session timeout reached. Terminating..."
-              break
-            fi
-            
-            HOURS=$((REMAINING / 3600))
-            MINUTES=$(((REMAINING % 3600) / 60))
-            
-            echo "Session active - Time remaining: ${HOURS}h ${MINUTES}m (IP: $TAILSCALE_IP)"
-            
-            # Check connections every 15 minutes
-            if [ $((ELAPSED % 900)) -eq 0 ]; then
-              echo "Status check:"
-              if pgrep -x tailscaled >/dev/null; then
-                echo "  Tailscale: Running"
-              else
-                echo "  Tailscale: Not running"
-              fi
-              
-              if lsof -i :5900 >/dev/null 2>&1; then
-                echo "  VNC: Running on port 5900"
-              else
-                echo "  VNC: Port 5900 not active"
-              fi
-            fi
-            
-            sleep 60  # Update every minute
-          done
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up..."
-          sudo tailscale logout 2>/dev/null || true
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop 2>/dev/null || true
-          echo "Cleanup completed"
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: VTriP"
+          Write-Host "Password: v137@com"
+          Write-Host "==================`n"
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
