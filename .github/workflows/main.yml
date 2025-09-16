@@ -1,11 +1,11 @@
-name: RDP-with-Avica
+name: RDP
 
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    runs-on: windows-2025
+    runs-on: windows-2026
     timeout-minutes: 3600
 
     steps:
@@ -15,7 +15,7 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
           netsh advfirewall firewall delete rule protocol=TCP localport=3389
-          netsh advfirewall firewall add rule name="RDP-Avica" dir=in action=allow protocol=TCP localport=3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
           netstat -an | findstr 3389
 
@@ -31,7 +31,7 @@ jobs:
           }
           echo "RDP_CREDS=User: $Username | Password: $PlainPassword" >> $env:GITHUB_ENV
 
-      - name: Set System Welcome Message
+      - name: Set System Welcome Message (Legal Notice)
         run: |
           $caption = "VTriP Syntary Client"
           $message = "=========================================`n    Windows VM | VTriP Syntary Client`n    Online 6 Hours`n========================================="
@@ -41,9 +41,13 @@ jobs:
       - name: Remove Pre-installed Apps
         run: |
           $epicPath = "${env:ProgramFiles}\Epic Games"
-          if (Test-Path $epicPath) { Remove-Item -Path $epicPath -Recurse -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $epicPath) {
+              Remove-Item -Path $epicPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
           $unityPath = "${env:ProgramFiles}\Unity Hub"
-          if (Test-Path $unityPath) { Remove-Item -Path $unityPath -Recurse -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $unityPath) {
+              Remove-Item -Path $unityPath -Recurse -Force -ErrorAction SilentlyContinue
+          }
           $desktopPath = [Environment]::GetFolderPath("Desktop")
           $startMenuPath = [Environment]::GetFolderPath("StartMenu")
           Remove-Item -Path "$desktopPath\Epic Games Launcher.lnk" -Force -ErrorAction SilentlyContinue
@@ -51,28 +55,35 @@ jobs:
           Remove-Item -Path "$startMenuPath\Programs\Epic Games Launcher.lnk" -Force -ErrorAction SilentlyContinue
           Remove-Item -Path "$startMenuPath\Programs\Unity Hub.lnk" -Force -ErrorAction SilentlyContinue
 
-      - name: Install Avica Agent
+      - name: Install Tailscale
         run: |
-          $avicaUrl = "https://your-avica-installer-url.exe"
-          $installerPath = "$env:TEMP\avica.exe"
-          Invoke-WebRequest -Uri $avicaUrl -OutFile $installerPath
-          Start-Process -FilePath $installerPath -ArgumentList "/SILENT" -Wait
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      - name: Configure Avica Connection
+      - name: Establish Tailscale Connection
         run: |
-          # Nếu Avica hỗ trợ CLI, dùng token hoặc ID để tự đăng nhập
-          $AvicaID = "${{ secrets.AVICA_ID }}"
-          $AvicaPass = "${{ secrets.AVICA_PASS }}"
-          Write-Host "Avica ID: $AvicaID"
-          Write-Host "Avica Pass: $AvicaPass"
-          echo "AVICA_ID=$AvicaID" >> $env:GITHUB_ENV
-          echo "AVICA_PASS=$AvicaPass" >> $env:GITHUB_ENV
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          Write-Host "Assigned Tailscale IP: $tsIP"
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Testing RDP on localhost..."
-          $testResult = Test-NetConnection -ComputerName "127.0.0.1" -Port 3389
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
               exit 1
@@ -82,6 +93,7 @@ jobs:
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: VTriP"
           Write-Host "Password: v137@com"
           Write-Host "==================`n"
